@@ -8,6 +8,8 @@ test('un pedido reutiliza address1 y ciudad del contacto conocido', async () => 
       name: 'Cinthya Pantanalli',
       address: null,
       address1: 'Carlos Munizaga 1353',
+      address2: 'Casa B',
+      address_description: 'Portón verde',
       city: 'La Serena',
       notes: 'Entregar después de las 18:00; llamar al llegar.',
       total_orders: 2,
@@ -19,6 +21,8 @@ test('un pedido reutiliza address1 y ciudad del contacto conocido', async () => 
   assert.equal(known.customer_name, 'Cinthya Pantanalli');
   assert.equal(known.address, 'Carlos Munizaga 1353');
   assert.equal(known.city, 'La Serena');
+  assert.equal(known.address2, 'Casa B');
+  assert.equal(known.addressDescription, 'Portón verde');
   assert.equal(known.customer_note, 'Entregar después de las 18:00; llamar al llegar.');
   assert.equal(known.found_in_contacts, true);
 });

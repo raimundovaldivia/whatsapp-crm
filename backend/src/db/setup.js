@@ -539,6 +539,8 @@ async function setupDatabase() {
 
       -- Migración: dirección editable en shopify_orders
       ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address1 TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address2 TEXT;
+      ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS shipping_address_description TEXT;
 
       -- ─── PEDIDOS AGENDADOS ─────────────────────────────────────────
       -- Clientes que quieren pedir para una fecha futura.
@@ -1148,6 +1150,7 @@ async function setupDatabase() {
       -- Migración: campos ricos de Shopify en contacts (para servir clientes desde DB local)
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address1          TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address2          TEXT;
+      ALTER TABLE contacts ADD COLUMN IF NOT EXISTS address_description TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS province          TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS zip               TEXT;
       ALTER TABLE contacts ADD COLUMN IF NOT EXISTS country           TEXT;

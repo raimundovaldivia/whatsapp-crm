@@ -1,3 +1,4 @@
+const { addressDetails } = require('../utils/address-details');
 /**
  * store.js — Rutas públicas de la tienda (sin autenticación)
  *
@@ -145,6 +146,8 @@ router.post('/:slug/orders', async (req, res) => {
     if (!org) return res.status(404).json({ error: 'Tienda no encontrada' });
 
     const { name, phone, address, city, items } = req.body;
+    const details = addressDetails(req.body);
+    const deliveryAddress = [address, details.address2, city, details.addressDescription].filter(Boolean).join(', ');
 
     if (![name, phone, address].every(v => typeof v === 'string' && v.length <= 300) ||
         !Array.isArray(items) || items.length < 1 || items.length > 100 ||
@@ -177,13 +180,13 @@ router.post('/:slug/orders', async (req, res) => {
       organizationId:  org.id,
       customerName:    name,
       customerPhone:   phoneClean,
-      shippingAddress: { address, city },
+      shippingAddress: { address, city, ...details },
       items,
       expectedTotal: req.body.expectedTotal,
     });
 
     // Guardar contacto
-    db.upsertContact(org.id, { phone: phoneClean, name, address, city }).catch(() => {});
+    db.upsertContact(org.id, { phone: phoneClean, name, address, city, ...details }).catch(() => {});
 
     const itemsText = resolvedItems
       .map(i => `  • ${i.title} x${i.quantity} — $${(i.price * i.quantity).toLocaleString('es-CL')}`)
@@ -196,7 +199,7 @@ router.post('/:slug/orders', async (req, res) => {
       `📦 *Productos:*`,
       itemsText,
       ``,
-      `📍 *Entrega:* ${address}, ${city}`,
+      `📍 *Entrega:* ${deliveryAddress}`,
       ...(deliveryFee != null ? [`🚚 *Despacho:* ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
       `💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}`,
       `💳 *Pago:* Contra entrega`,
@@ -209,7 +212,7 @@ router.post('/:slug/orders', async (req, res) => {
     if (evolutionChannel || (org.slug === xlPricing.STORE_SLUG && directChannel?.status === 'disconnected')) {
       try {
         if (org.slug === xlPricing.STORE_SLUG) {
-          const details = [itemsText, `Entrega: ${[address, city].filter(Boolean).join(', ')}`,
+          const details = [itemsText, `Entrega: ${deliveryAddress}`,
             ...(deliveryFee != null ? [`Despacho: ${deliveryFee ? '$' + deliveryFee.toLocaleString('es-CL') : 'Gratis'}`] : []),
             `Total: $${parseInt(total).toLocaleString('es-CL')}`, 'Pago: contra entrega'].join('\n');
           const notice = await require('../services/order-notices').send(org.id, { phone: phoneClean, customerName: name, orderName: `#DR-${order.id}` }, { kind: 'web_order', details, queueRef: { key: 'web:' + order.id } });
@@ -229,7 +232,7 @@ router.post('/:slug/orders', async (req, res) => {
     const adminPhone = await db.getSetting(org.id, 'admin_alert_phone');
     if (adminPhone && evolutionChannel) {
       const itemsSummary = resolvedItems.map(i => `${i.title} x${i.quantity}`).join(', ');
-      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${address}, ${city}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
+      const adminMsg = `🛒 *Nuevo pedido desde la tienda web*\n\n👤 *Cliente:* ${name} (${phoneClean})\n📦 *Productos:* ${itemsSummary}\n📍 *Dirección:* ${deliveryAddress}\n💵 *Total:* $${parseInt(total).toLocaleString('es-CL')}\n💳 Pago contra entrega`;
       try {
         await whatsapp.sendTextMessage(adminPhone, adminMsg, evolutionChannel);
       } catch (sendError) {

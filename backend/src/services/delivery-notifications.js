@@ -113,9 +113,12 @@ function normalizedItems(order = {}) {
 
 function normalizedAddress(order = {}) {
   const embedded = jsonValue(order.shipping_address, {}) || {};
+  const unit = order.shipping_address2 ?? embedded.address2 ?? order.raw_json?.shippingAddress?.address2;
+  const description = order.shipping_address_description ?? embedded.addressDescription;
   return {
     address: String(order.shipping_address1 || embedded.address1 || embedded.address || '').trim(),
     city: String(order.shipping_city || embedded.city || '').trim(),
+    ...(unit ? { address2: unit } : {}), ...(description ? { addressDescription: description } : {}),
   };
 }
 
@@ -146,7 +149,7 @@ function orderEditDetails(changes) {
     lines.push(`📦 Productos: ${changes.items.map(item => `${item.quantity}x ${item.name}`).join(' · ')}`);
   }
   if (changes.address) {
-    const destination = [changes.address.address, changes.address.city].filter(Boolean).join(', ');
+    const destination = [changes.address.address, changes.address.address2, changes.address.city, changes.address.addressDescription].filter(Boolean).join(', ');
     lines.push(`📍 Dirección: ${destination}`);
   }
   if (Object.hasOwn(changes, 'deliveryDate') && changes.deliveryDate) {

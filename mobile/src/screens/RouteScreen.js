@@ -480,7 +480,7 @@ export default function RouteScreen({ route: navRoute, navigation }) {
                     <Text style={[s.stopName, isDone && s.textDone]} numberOfLines={1}>
                       {stop.customerName}
                     </Text>
-                    <Text style={s.stopAddr} numberOfLines={1}>{stop.fullAddress || navigationDestination(stop) || 'Sin dirección'}</Text>
+                    <Text style={s.stopAddr} numberOfLines={2}>{[stop.fullAddress || navigationDestination(stop) || 'Sin dirección', stop.address2].filter(Boolean).join(' · ')}</Text>
                     {stop?.coverage?.status === 'outside' ? <Text style={s.coverageChip}>⚠ Fuera de cobertura · {stop.coverage.distanceKm} km</Text> : null}
                     {stop?.coverage?.status === 'unlocated' ? <Text style={s.coverageChip}>⚠ Dirección sin ubicar</Text> : null}
                     {stop.isReturn ? <Text style={s.stopHistory}>↩️ Cambio/devolución · abre para confirmar retiro y reemplazo</Text> : null}

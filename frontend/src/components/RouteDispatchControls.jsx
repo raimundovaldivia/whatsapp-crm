@@ -66,7 +66,7 @@ export default function RouteDispatchControls({ route, loadReady, colors, onUpda
       if (finished.has(route.stop_statuses?.[key])) return null;
       return <div key={key} style={{ padding: '10px 0', borderBottom: `1px solid ${colors.border}` }}>
         <div style={{ color: colors.textPrimary, fontWeight: 600 }}>{index + 1}. {stop.orderName || `#${stop.id}`} · {stop.customerName}</div>
-        <p style={{ color: colors.textSecondary, fontSize: 12 }}>{stop.fullAddress || stop.address}</p>
+        <p style={{ color: colors.textSecondary, fontSize: 12 }}>{[stop.fullAddress || stop.address, stop.address2, stop.addressDescription].filter(Boolean).join(' · ')}</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           <button disabled={busy || notified[key]} onClick={() => notify(key)} style={ui.btn(colors, 'secondary')}>
             {notified[key] || 'Avisar que va en camino'}

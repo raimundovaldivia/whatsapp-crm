@@ -489,6 +489,7 @@ async function createDraftOrder(shop, token, customer, items, note = '') {
   const shippingAddress = (customer.address1 || customer.city)
     ? {
         address1:  customer.address1  || '',
+        ...(customer.address2 ? { address2: customer.address2 } : {}),
         city:      customer.city      || '',
         country:   customer.country   || 'CL',
         firstName: (customer.name || '').split(' ')[0] || '',

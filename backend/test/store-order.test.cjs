@@ -73,9 +73,16 @@ test('store orders calculate server-side, aggregate quantities and update stock 
       items: [{ productId: 10, quantity: 1 }, { productId: 10, quantity: 2 }],
       customerName: 'Cliente prueba',
       customerPhone: '56911111111',
-      shippingAddress: { address: 'Dirección prueba', city: 'La Serena' },
+      shippingAddress: { address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' },
     });
 
+    const stored = (await engine.query('SELECT shipping_address FROM orders WHERE id = $1', [result.order.id])).rows[0];
+    assert.deepEqual(JSON.parse(stored.shipping_address), { address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' });
+    await db.upsertContact(1, { phone: '56911111111', address: 'Dirección prueba', city: 'La Serena', address2: 'Depto. 24', addressDescription: 'Tocar el timbre azul' });
+    await db.upsertContact(1, { phone: '56911111111', name: 'Cliente' });
+    const contact = await db.getContact(1, '56911111111');
+    assert.equal(contact.address2, 'Depto. 24');
+    assert.equal(contact.address_description, 'Tocar el timbre azul');
     assert.equal(result.total, 15000);
     assert.equal(result.resolvedItems.length, 1);
     assert.equal(result.resolvedItems[0].quantity, 3);

@@ -1,3 +1,4 @@
+const { addressDetails } = require('../utils/address-details');
 /**
  * Pipeline de agentes — Orquesta los 3 agentes y gestiona la creación de órdenes
  *
@@ -2435,6 +2436,7 @@ REGLAS ABSOLUTAS:
       editing_order_id: activeOrder.id,
       customer_name: activeOrder.customer_name || undefined,
       address: addr.address || addr.address1 || undefined,
+      ...addressDetails(addr),
       city:    addr.city || undefined,
       items,
     };
@@ -2686,7 +2688,7 @@ Lee la conversación y devuelve SOLO un JSON: {"items":[{"product_name":"<nombre
       items: priced.items.map(it => ({ name: it.name, title: it.name, quantity: it.quantity, price: it.price, product_id: it.product_id || null, variant_id: it.variant_id || null })),
       customerName:  delivered.customer_name,
       customerPhone: delivered.customer_phone || conversation.phone_number,
-      shippingAddress: { address: addr.address || addr.address1 || '', city: addr.city || '' },
+      shippingAddress: { address: addr.address || addr.address1 || '', city: addr.city || '', ...addressDetails(addr) },
       totalPrice: total,
       status: 'por_despachar',
     });
@@ -2724,6 +2726,8 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
     if (contact) {
       if (contact.name)       result.customer_name  = contact.name;
       if (contact.address || contact.address1) result.address = contact.address || contact.address1;
+      if (contact.address2) result.address2 = contact.address2;
+      if (contact.address_description) result.addressDescription = contact.address_description;
       if (contact.city)       result.city           = contact.city;
       if (contact.region)     result.region         = contact.region;
       if (contact.email)      result.customer_email = contact.email;
@@ -2746,6 +2750,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
         const addr = shopifyCustomer.address;
         if (shopifyCustomer.name)  result.customer_name       = shopifyCustomer.name;
         if (addr?.address1)        result.address             = addr.address1;
+        if (addr?.address2) result.address2 = addr.address2;
         if (addr?.city)            result.city                = addr.city;
         if (shopifyCustomer.email) result.customer_email      = shopifyCustomer.email;
         result.shopify_customer_id = shopifyCustomer.id;
@@ -2757,6 +2762,7 @@ async function getKnownCustomerData(orgId, phoneNumber, ds = null) {
           name:      result.customer_name,
           email:     result.customer_email,
           address:   result.address,
+          ...addressDetails(result),
           city:      result.city,
           shopifyId: shopifyCustomer.id,
         }).catch(() => {});
@@ -2845,7 +2851,9 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
     const knownPhone = orderDraft.customer_phone || conversation.phone_number;
     const known = knownPhone ? await getKnownCustomerData(orgId, knownPhone, ds) : {};
     if (Object.keys(known).length > 0) {
+      const sameAddress = (!orderDraft.address || orderDraft.address === known.address) && (!orderDraft.city || orderDraft.city === known.city);
       for (const [key, val] of Object.entries(known)) {
+        if ((key === 'address2' || key === 'addressDescription') && !sameAddress) continue;
         if (val && !orderDraft[key]) orderDraft[key] = val;
       }
       const fuente = known.found_in_shopify ? 'Shopify' : 'historial CRM';
@@ -3127,7 +3135,8 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
 
   // 1b. Si el cliente acaba de dar dirección o ciudad que no teníamos → guardar en contacts.
   const addrChanged = (updatedDraft.address && updatedDraft.address !== orderDraft.address)
-                   || (updatedDraft.city    && updatedDraft.city    !== orderDraft.city);
+                   || (updatedDraft.city    && updatedDraft.city    !== orderDraft.city)
+                   || updatedDraft.address2 !== orderDraft.address2 || updatedDraft.addressDescription !== orderDraft.addressDescription;
   if (addrChanged) {
     const contactPhone = updatedDraft.customer_phone || conversation.phone_number;
     if (contactPhone) {
@@ -3135,6 +3144,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       phone:   contactPhone,
       name:    updatedDraft.customer_name || null,
       address: updatedDraft.address       || null,
+      ...addressDetails(updatedDraft),
       city:    updatedDraft.city          || null,
       source:  conversation.source_channel || 'whatsapp',
     }).catch(e => console.warn('[Pipeline] No se pudo guardar dirección en contacto:', e.message));
@@ -3187,7 +3197,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
       ...(it.locked_quote ? { locked_quote: true } : {}),
       ...(it.free_gift ? { free_gift: true, promotion_offer: true } : {}),
     }));
-    const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city,
+    const shippingAddress = { address: updatedDraft.address, city: updatedDraft.city, ...addressDetails(updatedDraft),
       ...(priced.deliveryFee != null ? { delivery_fee: priced.deliveryFee, products_total: priced.productsTotal } : {}) };
     const summary = pricing.summaryBlock(priced);
     const deliveryLine = updatedDraft.delivery_date ? `\n📅 Entrega: ${formatDateEs(updatedDraft.delivery_date)}` : '';
@@ -3201,6 +3211,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
         name:      updatedDraft.customer_name  || null,
         email:     updatedDraft.customer_email || null,
         address:   updatedDraft.address        || null,
+        ...addressDetails(updatedDraft),
         city:      updatedDraft.city           || null,
         region:    updatedDraft.region         || null,
         shopifyId: updatedDraft.shopify_customer_id || null,
@@ -3379,7 +3390,7 @@ async function handleOrderCollection(orgId, conversationId, conversation, userMe
   if (claimed) {
     const requestedDate = updatedDraft.delivery_date ? `\n📅 Fecha solicitada: ${formatDateEs(updatedDraft.delivery_date)}` : '';
     return {
-      response: `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${updatedDraft.customer_name}\n📍 ${updatedDraft.address}, ${updatedDraft.city}${requestedDate}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`,
+      response: `Revisa el resumen antes de crear tu pedido:\n\n${pricing.summaryBlock(priced)}\n👤 ${updatedDraft.customer_name}\n📍 ${checkout.formatAddress(updatedDraft)}${requestedDate}\n\n¿Todo correcto? El pedido todavía no está creado y la entrega está pendiente de confirmación.`,
       agentType: 'orders', newState: 'collecting_order',
     };
   }
@@ -3490,6 +3501,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     email:      draft.customer_email  || null,
     customerId: draft.shopify_customer_id || null,
     address1:   draft.address         || null,
+    address2:   draft.address2        || null,
     city:       draft.city            || null,
     country:    'CL',
   };
@@ -3513,7 +3525,7 @@ async function createShopifyOrder(orgId, conversationId, draft) {
     items: items.map(it => ({ name: it.name || it.product_name, title: it.name || it.product_name, quantity: it.quantity, price: it.price, product_id: it.product_id || null, variant_id: it.variant_id || null })),
     customerName: draft.customer_name,
     customerPhone,
-    shippingAddress: { address: draft.address, city: draft.city },
+    shippingAddress: { address: draft.address, city: draft.city, ...addressDetails(draft) },
     totalPrice: shopifyResult.totalPrice || draft.total || null,
     note: orderNote,
     personalOfferId: draft.personal_offer_id || null,

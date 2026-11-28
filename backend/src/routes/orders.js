@@ -1,3 +1,4 @@
+const { addressDetails, shippingObject, shopifyAddress } = require('../utils/address-details');
 /**
  * orders.js — Rutas para gestionar pedidos del CRM
  *
@@ -60,7 +61,7 @@ router.post('/', async (req, res) => {
       price: Number(i.price) || 0,
     })));
 
-    const shippingJson = address ? JSON.stringify({ address1: address, city: city || '' }) : null;
+    const shippingJson = address ? JSON.stringify({ address1: address, city: city || '', ...addressDetails(req.body) }) : null;
     const orderStatus  = status || 'nuevo';
     const pool = getPool();
 
@@ -95,13 +96,14 @@ router.get('/', async (req, res) => {
           ELSE o.customer_name
         END AS customer_name_resolved,
         ct.address1  AS contact_address1,
+        ct.address2 AS contact_address2, ct.address_description AS contact_description,
         ct.address   AS contact_address,
         ct.city      AS contact_city,
         ct.province  AS contact_province
       FROM orders o
       LEFT JOIN conversations c ON o.conversation_id = c.id
       LEFT JOIN LATERAL (
-        SELECT name, address1, address, city, province
+        SELECT name, address1, address, address2, address_description, city, province
         FROM contacts
         WHERE organization_id = o.organization_id
           AND phone = ANY(ARRAY[
@@ -118,11 +120,13 @@ router.get('/', async (req, res) => {
     );
 
     const parsed = orders.map(o => {
-      const addr = safeJSON(o.shipping_address, {});
+      const addr = shippingObject(o.shipping_address);
       // Si la orden no tiene dirección propia, usar la del contacto
       if (!addr.address && !addr.address1) {
         if (o.contact_address1) addr.address1 = o.contact_address1;
         else if (o.contact_address) addr.address1 = o.contact_address;
+        if (o.contact_address2) addr.address2 = o.contact_address2;
+        if (o.contact_description) addr.addressDescription = o.contact_description;
         if (o.contact_city)     addr.city     = o.contact_city;
         if (o.contact_province) addr.province = o.contact_province;
       }
@@ -235,7 +239,9 @@ router.get('/history/:phone', async (req, res) => {
     const { rows: shopifyOrders } = await pool.query(`
       SELECT id, shopify_order_id, shopify_name, customer_name, total_price,
              financial_status, fulfillment_status, shopify_created_at, items,
-             shipping_address1, shipping_city, payment_method, payment_marked_at,
+             COALESCE(shipping_address1, raw_json->'shippingAddress'->>'address1') AS shipping_address1,
+             COALESCE(shipping_address2, raw_json->'shippingAddress'->>'address2') AS shipping_address2,
+             shipping_address_description, shipping_city, payment_method, payment_marked_at,
              payment_cash_amount, payment_transfer_amount, payment_record_source,
              crm_status, delivered_at
       FROM shopify_orders
@@ -259,13 +265,13 @@ router.get('/history/:phone', async (req, res) => {
 
     // Dirección actual del contacto (fuente autoritativa)
     const { rows: contactRows } = await pool.query(`
-      SELECT address1, address, city FROM contacts
+      SELECT address1, address, address2, address_description, city FROM contacts
       WHERE organization_id = $1 AND phone = ANY($2::text[])
       ORDER BY updated_at DESC NULLS LAST
       LIMIT 1
     `, [req.orgId, variants]);
     const contactAddress = contactRows[0]
-      ? [contactRows[0].address1 || contactRows[0].address, contactRows[0].city].filter(Boolean).join(', ')
+      ? [contactRows[0].address1 || contactRows[0].address, contactRows[0].address2, contactRows[0].city, contactRows[0].address_description].filter(Boolean).join(', ')
       : null;
 
     // Resumen agregado
@@ -306,11 +312,12 @@ router.get('/shopify', async (req, res) => {
       SELECT
         so.*,
         ct.address1   AS contact_address1,
+        ct.address2 AS contact_address2, ct.address_description AS contact_description,
         ct.city       AS contact_city,
         ct.province   AS contact_province
       FROM shopify_orders so
       LEFT JOIN LATERAL (
-        SELECT address1, city, province
+        SELECT address1, address2, address_description, city, province
         FROM contacts
         WHERE organization_id = so.organization_id
           AND phone = CASE
@@ -327,9 +334,13 @@ router.get('/shopify', async (req, res) => {
     // Principio: phone = clave primaria de enlace; contact = fuente de verdad para dirección.
     const orders = rows.map(o => {
       const result = { ...o };
-      // Preferir datos del contacto cuando existen (no solo como fallback)
-      if (result.contact_city)    result.shipping_city     = result.contact_city;
-      if (result.contact_address1) result.shipping_address1 = result.contact_address1;
+      const location = shopifyAddress(o);
+      result.shipping_address1 = location.address || o.contact_address1;
+      result.shipping_city = location.city || o.contact_city;
+      result.shipping_address2 = location.address ? location.address2 : o.contact_address2;
+      result.shipping_address_description = location.address ? location.addressDescription : o.contact_description;
+      delete result.contact_address2;
+      delete result.contact_description;
       // Limpiar campos auxiliares del JOIN
       delete result.contact_address1;
       delete result.contact_city;
@@ -351,7 +362,8 @@ router.get('/shopify', async (req, res) => {
  */
 router.patch('/shopify/:id/address', async (req, res) => {
   try {
-    const { address1, city, province, updateContact = false } = req.body;
+    const { address1, city, updateContact = false } = req.body;
+    const details = addressDetails(req.body);
     if (!address1?.trim()) return res.status(400).json({ error: 'address1 es requerido' });
 
     const pool = getPool();
@@ -364,12 +376,13 @@ router.patch('/shopify/:id/address', async (req, res) => {
       `UPDATE shopify_orders
          SET shipping_city       = COALESCE($3, shipping_city),
              shipping_address1   = $2,
+             shipping_address2 = COALESCE($5, shipping_address2), shipping_address_description = COALESCE($6, shipping_address_description),
              manual_delivery_point = CASE WHEN shipping_address1 IS NOT DISTINCT FROM $2
                AND shipping_city IS NOT DISTINCT FROM COALESCE($3, shipping_city) THEN manual_delivery_point END,
              synced_at           = NOW()
        WHERE id = $1 AND organization_id = $4
        RETURNING *`,
-      [parseInt(req.params.id), address1.trim(), city?.trim() || null, req.orgId]
+      [parseInt(req.params.id), address1.trim(), city?.trim() || null, req.orgId, details.address2 ?? null, details.addressDescription ?? null]
     );
 
     if (!rows.length) return res.status(404).json({ error: 'Orden no encontrada' });
@@ -381,10 +394,10 @@ router.patch('/shopify/:id/address', async (req, res) => {
         `UPDATE contacts SET
            address1   = $2,
            address    = $2,
-           city       = $3,
+           city       = $3, address2 = COALESCE($5, address2), address_description = COALESCE($6, address_description),
            updated_at = NOW()
          WHERE organization_id = $1 AND phone = $4`,
-        [req.orgId, address1.trim(), city?.trim() || null, rows[0].customer_phone]
+        [req.orgId, address1.trim(), city?.trim() || null, rows[0].customer_phone, details.address2 ?? null, details.addressDescription ?? null]
       );
     }
 
@@ -484,7 +497,7 @@ router.patch('/:id/address', async (req, res) => {
   try {
     const { address, city, updateContact = false } = req.body;
     if (!address) return res.status(400).json({ error: 'address es requerido' });
-    const addrJson = JSON.stringify({ address, city: city || '' });
+    const details = addressDetails(req.body);
     const pool = getPool();
     const orderId = parseInt(req.params.id);
     const { rows: [before] } = await pool.query(
@@ -492,21 +505,24 @@ router.patch('/:id/address', async (req, res) => {
       [orderId, req.orgId]
     );
     if (!before) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const oldAddress = shippingObject(before.shipping_address);
+    const addrJson = JSON.stringify({ ...oldAddress, address, city: city || '', ...details });
+    const sameStreet = (oldAddress.address || oldAddress.address1) === address && (oldAddress.city || '') === (city || '');
     const { rows: [order] } = await pool.query(
       `UPDATE orders SET shipping_address = $1,
-         manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $1 THEN manual_delivery_point END
+         manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $1 OR ($4 AND shipping_address IS NOT DISTINCT FROM $5) THEN manual_delivery_point END
        WHERE id = $2 AND organization_id = $3 RETURNING *`,
-      [addrJson, orderId, req.orgId]
+      [addrJson, orderId, req.orgId, sameStreet, before.shipping_address]
     );
     if (updateContact && order.customer_phone) {
       await pool.query(
         `UPDATE contacts SET
            address1 = $2,
            address = $2,
-           city = $3,
+           city = $3, address2 = COALESCE($5, address2), address_description = COALESCE($6, address_description),
            updated_at = NOW()
          WHERE organization_id = $1 AND phone = $4`,
-        [req.orgId, address.trim(), city?.trim() || null, order.customer_phone]
+        [req.orgId, address.trim(), city?.trim() || null, order.customer_phone, details.address2 ?? null, details.addressDescription ?? null]
       );
     }
     const notification = await sendOrderEditNotification(req.orgId, {
@@ -1078,6 +1094,7 @@ router.patch('/set-items', async (req, res) => {
  */
 router.patch('/history-edit', async (req, res) => {
   const { source, id, items, address, city, note = '', updateContact = false } = req.body;
+  const details = addressDetails(req.body);
   if (!['bot', 'shopify'].includes(source)) return res.status(400).json({ success: false, error: 'source inválido' });
   if (!Array.isArray(items)) return res.status(400).json({ success: false, error: 'items debe ser un array' });
   if (!String(address || '').trim()) return res.status(400).json({ success: false, error: 'La dirección es requerida' });
@@ -1116,6 +1133,7 @@ router.patch('/history-edit', async (req, res) => {
                 total_price = $2,
                 shipping_address1 = $3,
                 shipping_city = $4,
+                shipping_address2 = COALESCE($8, shipping_address2), shipping_address_description = COALESCE($9, shipping_address_description),
                 manual_delivery_point = CASE WHEN shipping_address1 IS NOT DISTINCT FROM $3
                   AND shipping_city IS NOT DISTINCT FROM $4 THEN manual_delivery_point END,
                 delivery_note = $5,
@@ -1123,7 +1141,7 @@ router.patch('/history-edit', async (req, res) => {
                 synced_at = NOW()
           WHERE shopify_order_id = $6 AND organization_id = $7
           RETURNING *`,
-        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, note.trim() || null, String(id), req.orgId]
+        [JSON.stringify(clean), total, address.trim(), String(city || '').trim() || null, note.trim() || null, String(id), req.orgId, details.address2 ?? null, details.addressDescription ?? null]
       );
       order = rows[0];
     } else {
@@ -1132,13 +1150,14 @@ router.patch('/history-edit', async (req, res) => {
             SET items = $1,
                 total_price = $2,
                 shipping_address = $3,
-                manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $3 THEN manual_delivery_point END,
+                manual_delivery_point = CASE WHEN shipping_address IS NOT DISTINCT FROM $3 OR $7 THEN manual_delivery_point END,
                 delivery_note = $4,
                 delivery_modified = TRUE,
                 updated_at = NOW()
           WHERE id = $5 AND organization_id = $6
           RETURNING *`,
-        [JSON.stringify(clean), String(total), JSON.stringify({ address: address.trim(), city: String(city || '').trim() }), note.trim() || null, parseInt(id), req.orgId]
+        [JSON.stringify(clean), String(total), JSON.stringify({ ...shippingObject(before.shipping_address), address: address.trim(), city: String(city || '').trim(), ...details }), note.trim() || null, parseInt(id), req.orgId,
+          (shippingObject(before.shipping_address).address || shippingObject(before.shipping_address).address1) === address.trim() && (shippingObject(before.shipping_address).city || '') === String(city || '').trim()]
       );
       order = rows[0];
     }
@@ -1157,9 +1176,9 @@ router.patch('/history-edit', async (req, res) => {
       ].filter(Boolean))];
       await client.query(
         `UPDATE contacts
-            SET address1 = $3, address = $3, city = $4, updated_at = NOW()
+            SET address1 = $3, address = $3, city = $4, address2 = COALESCE($5, address2), address_description = COALESCE($6, address_description), updated_at = NOW()
           WHERE organization_id = $1 AND phone = ANY($2::text[])`,
-        [req.orgId, variants, address.trim(), String(city || '').trim() || null]
+        [req.orgId, variants, address.trim(), String(city || '').trim() || null, details.address2 ?? null, details.addressDescription ?? null]
       );
     }
 
