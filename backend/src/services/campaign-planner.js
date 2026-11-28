@@ -41,6 +41,7 @@ function normalizePlan(raw, templates) {
     purchaseDays: Number.isInteger(purchaseDaysValue) && purchaseDaysValue >= 1 && purchaseDaysValue <= 3650
       ? purchaseDaysValue : null,
     product: String(audienceRaw.product || '').trim().slice(0, 120) || null,
+    keepSelectedProducts: audienceRaw.keepSelectedProducts === true || (audienceRaw.keepSelectedProducts !== false && !audienceRaw.product),
     deliveryIncidentsOnly: audienceRaw.deliveryIncidentsOnly === true,
   };
   const steps = [];
@@ -111,6 +112,7 @@ Reglas:
 - audience.type: all|natural|empresa.
 - audience.segment: all|lead|new|repeat|loyal (lead=sin compras, new=1, repeat=2-4, loyal=5+).
 - purchaseDays es entero o null. product es texto de búsqueda o null.
+- Si currentAudience.products contiene productos seleccionados, usa keepSelectedProducts=true y product=null para conservar la selección, salvo que el administrador pida cambiarla o quitarla. Para reemplazarla o quitarla usa keepSelectedProducts=false.
 - Cada paso usa un templateName exacto del catálogo. Máximo 5 pasos salvo petición explícita.
 - Primer paso: triggerCondition=always. Siguientes: no_reply|read_no_reply|delivered_no_reply.
 - waitHours es el tiempo desde el paso anterior.
@@ -121,7 +123,7 @@ Reglas:
 - Escribe summary en español claro.
 
 Devuelve SOLO JSON:
-{"name":"...","objective":"...","cooldownHours":48,"audience":{"type":"all","segment":"all","purchaseDays":null,"product":null,"deliveryIncidentsOnly":false},"steps":[{"templateName":"nombre_exacto","waitHours":0,"triggerCondition":"always","variableModes":["first_name"]}],"summary":"...","assumptions":[],"warnings":[],"missingInfo":[]}`;
+{"name":"...","objective":"...","cooldownHours":48,"audience":{"type":"all","segment":"all","purchaseDays":null,"product":null,"keepSelectedProducts":true,"deliveryIncidentsOnly":false},"steps":[{"templateName":"nombre_exacto","waitHours":0,"triggerCondition":"always","variableModes":["first_name"]}],"summary":"...","assumptions":[],"warnings":[],"missingInfo":[]}`;
 }
 
 async function planCampaign({ instruction, templates, currentAudience = {}, client = null }) {
